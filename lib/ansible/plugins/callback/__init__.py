@@ -284,6 +284,9 @@ class CallbackBase(AnsiblePlugin):
     def playbook_on_notify(self, host, handler):
         pass
 
+    def playbook_on_cancel(self, host, handler):
+        pass
+
     def playbook_on_no_hosts_matched(self):
         pass
 
