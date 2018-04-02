@@ -366,6 +366,17 @@ class StrategyBase:
             else:
                 return self._inventory.get_host(host_name)
 
+        def notify_handler(handler, original_host, notify_type):
+            if handler._uuid not in self._notified_handlers:
+                self._notified_handlers[handler._uuid] = []
+            if original_host in self._notified_handlers[handler._uuid]:
+                if notify_type == '_ansible_denotify':
+                    self._notified_handlers[handler._uuid].remove(original_host)
+                    self._tqm.send_callback('v2_playbook_on_denotify', handler, original_host)
+            elif notify_type == '_ansible_notify':
+                self._notified_handlers[handler._uuid].append(original_host)
+                self._tqm.send_callback('v2_playbook_on_notify', handler, original_host)
+
         def search_handler_blocks_by_name(handler_name, handler_blocks):
             for handler_block in handler_blocks:
                 for handler_task in handler_block.block:
@@ -531,13 +542,16 @@ class StrategyBase:
                     result_items = [task_result._result]
 
                 for result_item in result_items:
-                    if '_ansible_notify' in result_item:
-                        if task_result.is_changed():
+                    if task_result.is_changed():
+                        for notify_type in [ '_ansible_notify', '_ansible_denotify' ]:
+                            if notify_type not in result_item:
+                                continue
+
                             # The shared dictionary for notified handlers is a proxy, which
                             # does not detect when sub-objects within the proxy are modified.
                             # So, per the docs, we reassign the list so the proxy picks up and
                             # notifies all other threads
-                            for handler_name in result_item['_ansible_notify']:
+                            for handler_name in result_item[notify_type]:
                                 found = False
                                 # Find the handler using the above helper.  First we look up the
                                 # dependency chain of the current task (if it's from a role), otherwise
@@ -546,11 +560,7 @@ class StrategyBase:
                                 target_handler = search_handler_blocks_by_name(handler_name, iterator._play.handlers)
                                 if target_handler is not None:
                                     found = True
-                                    if target_handler._uuid not in self._notified_handlers:
-                                        self._notified_handlers[target_handler._uuid] = []
-                                    if original_host not in self._notified_handlers[target_handler._uuid]:
-                                        self._notified_handlers[target_handler._uuid].append(original_host)
-                                        self._tqm.send_callback('v2_playbook_on_notify', target_handler, original_host)
+                                    notify_handler(target_handler, original_host, notify_type)
                                 else:
                                     # As there may be more than one handler with the notified name as the
                                     # parent, so we just keep track of whether or not we found one at all
@@ -558,24 +568,18 @@ class StrategyBase:
                                         target_handler = search_handler_blocks_by_uuid(target_handler_uuid, iterator._play.handlers)
                                         if target_handler and parent_handler_match(target_handler, handler_name):
                                             found = True
-                                            if original_host not in self._notified_handlers[target_handler._uuid]:
-                                                self._notified_handlers[target_handler._uuid].append(original_host)
-                                                self._tqm.send_callback('v2_playbook_on_notify', target_handler, original_host)
+                                            notify_handler(target_handler, original_host, notify_type)
 
                                 if handler_name in self._listening_handlers:
                                     for listening_handler_uuid in self._listening_handlers[handler_name]:
                                         listening_handler = search_handler_blocks_by_uuid(listening_handler_uuid, iterator._play.handlers)
                                         if listening_handler is not None:
                                             found = True
-                                        else:
-                                            continue
-                                        if original_host not in self._notified_handlers[listening_handler._uuid]:
-                                            self._notified_handlers[listening_handler._uuid].append(original_host)
-                                            self._tqm.send_callback('v2_playbook_on_notify', listening_handler, original_host)
+                                            notify_handler(listening_handler, original_host, notify_type)
 
                                 # and if none were found, then we raise an error
                                 if not found:
-                                    msg = ("The requested handler '%s' was not found in either the main handlers list nor in the listening "
+                                    msg = ("The requested handler '%s' was not found in either the main handlers list or in the listening "
                                            "handlers list" % handler_name)
                                     if C.ERROR_ON_MISSING_HANDLER:
                                         raise AnsibleError(msg)
