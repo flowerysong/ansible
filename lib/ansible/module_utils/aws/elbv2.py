@@ -352,10 +352,10 @@ class NetworkLoadBalancer(ElasticLoadBalancerV2):
         params['Type'] = self.type
 
         # Other parameters
-        if self.subnets is not None:
+        if self.subnets:
             params['Subnets'] = self.subnets
         params['Scheme'] = self.scheme
-        if self.tags is not None:
+        if self.tags:
             params['Tags'] = self.tags
 
         try:

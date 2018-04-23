@@ -271,16 +271,15 @@ vpc_id:
     sample: vpc-0011223344
 '''
 
-from ansible.module_utils.basic import AnsibleModule
-from ansible.module_utils.ec2 import boto3_conn, get_aws_connection_info, camel_dict_to_snake_dict, ec2_argument_spec, \
-    boto3_tag_list_to_ansible_dict, compare_aws_tags, HAS_BOTO3
+from ansible.module_utils.aws.core import AnsibleAWSModule
+from ansible.module_utils.ec2 import boto3_conn, camel_dict_to_snake_dict, \
+    get_aws_connection_info, boto3_tag_list_to_ansible_dict, compare_aws_tags
 from ansible.module_utils.aws.elbv2 import NetworkLoadBalancer, ELBListeners, ELBListener
 
 try:
-    import boto3
     from botocore.exceptions import ClientError, NoCredentialsError
 except ImportError:
-    HAS_BOTO3 = False
+    pass # Handled by AnsibleAWSModule
 
 
 def create_or_update_elb(elb_obj):
@@ -373,8 +372,7 @@ def delete_elb(elb_obj):
 
 def main():
 
-    argument_spec = ec2_argument_spec()
-    argument_spec.update(
+    argument_spec = dict(
         dict(
             deletion_protection=dict(type='bool'),
             listeners=dict(type='list'),
@@ -391,7 +389,7 @@ def main():
         )
     )
 
-    module = AnsibleModule(argument_spec=argument_spec,
+    module = AnsibleAWSModule(argument_spec=argument_spec,
                            mutually_exclusive=[['subnets', 'subnet_mappings']])
 
     # Check for subnets or subnet_mappings if state is present
@@ -424,16 +422,12 @@ def main():
             if 'Port' not in listener.keys():
                 module.fail_json(msg="'Port' is a required listener dict key")
 
-    if not HAS_BOTO3:
-        module.fail_json(msg='boto3 required for this module')
-
     region, ec2_url, aws_connect_params = get_aws_connection_info(module, boto3=True)
-
-    if region:
-        connection = boto3_conn(module, conn_type='client', resource='elbv2', region=region, endpoint=ec2_url, **aws_connect_params)
-        connection_ec2 = boto3_conn(module, conn_type='client', resource='ec2', region=region, endpoint=ec2_url, **aws_connect_params)
-    else:
+    if not region:
         module.fail_json(msg="region must be specified")
+
+    connection = module.client('elbv2');
+    connection_ec2 = module.client('ec2');
 
     elb = NetworkLoadBalancer(connection, connection_ec2, module)
 
