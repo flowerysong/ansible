@@ -1,0 +1,2 @@
+deprecated_features:
+- s3_sync - deprecate in favor of aws_s3_sync

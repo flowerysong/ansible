@@ -15,7 +15,7 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
 ANSIBLE_METADATA = {'metadata_version': '1.1',
-                    'status': ['preview'],
+                    'status': ['deprecated'],
                     'supported_by': 'community'}
 
 
@@ -23,6 +23,10 @@ DOCUMENTATION = '''
 ---
 module: s3_sync
 short_description: Efficiently upload multiple files to S3
+deprecated:
+  removed_in: "2.12"
+  why: Replaced by a more efficient module with a redesigned interface.
+  alternative: Use M(aws_s3_sync) instead.
 description:
      - The S3 module is great, but it is very slow for a large volume of files- even a dozen will be noticeable. In addition to speed, it handles globbing,
        inclusions/exclusions, mime types, expiration mapping, recursion, cache control and smart directory mapping.
