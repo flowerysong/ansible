@@ -1,5 +1,7 @@
 lib/ansible/modules/cloud/amazon/_ec2_ami_find.py E322
 lib/ansible/modules/cloud/amazon/_ec2_ami_find.py E323
+lib/ansible/modules/cloud/amazon/_s3_sync.py E322
+lib/ansible/modules/cloud/amazon/_s3_sync.py E326
 lib/ansible/modules/cloud/amazon/aws_acm_facts.py E322
 lib/ansible/modules/cloud/amazon/aws_acm_facts.py E323
 lib/ansible/modules/cloud/amazon/aws_api_gateway.py E322
@@ -88,8 +90,6 @@ lib/ansible/modules/cloud/amazon/route53.py E327
 lib/ansible/modules/cloud/amazon/route53_health_check.py E324
 lib/ansible/modules/cloud/amazon/s3_lifecycle.py E322
 lib/ansible/modules/cloud/amazon/s3_lifecycle.py E325
-lib/ansible/modules/cloud/amazon/s3_sync.py E322
-lib/ansible/modules/cloud/amazon/s3_sync.py E326
 lib/ansible/modules/cloud/amazon/s3_website.py E324
 lib/ansible/modules/cloud/amazon/sts_assume_role.py E317
 lib/ansible/modules/cloud/atomic/atomic_container.py E317
