@@ -331,7 +331,7 @@ class AnsibleCollectionRef:
     # FUTURE: introspect plugin loaders to get these dynamically?
     VALID_REF_TYPES = frozenset(to_text(r) for r in ['action', 'become', 'cache', 'callback', 'cliconf', 'connection',
                                                      'doc_fragments', 'filter', 'httpapi', 'inventory', 'lookup',
-                                                     'module_utils', 'modules', 'netconf', 'role', 'shell', 'strategy',
+                                                     'module_groups', 'module_utils', 'modules', 'netconf', 'role', 'shell', 'strategy',
                                                      'terminal', 'test', 'vars'])
 
     # FIXME: tighten this up to match Python identifier reqs, etc
