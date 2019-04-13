@@ -66,7 +66,7 @@ class ActionModule(ActionBase):
                         del new_module_args['use']
 
                     # get defaults for specific module
-                    new_module_args = get_action_args_with_defaults(module, new_module_args, self._task.module_defaults, self._templar)
+                    new_module_args = get_action_args_with_defaults(module, new_module_args, self._task.module_defaults, self._templar, self._task.collections)
 
                     display.vvvv("Running %s" % module)
                     result.update(self._execute_module(module_name=module, module_args=new_module_args, task_vars=task_vars, wrap_async=self._task.async_val))

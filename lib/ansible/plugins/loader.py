@@ -876,6 +876,13 @@ shell_loader = PluginLoader(
     'shell_plugins',
 )
 
+module_group_loader = PluginLoader(
+    'ModuleGroup',
+    'ansible.plugins.module_groups',
+    C.MODULE_GROUP_PLUGIN_PATH,
+    'module_groups',
+)
+
 module_loader = PluginLoader(
     '',
     'ansible.modules',

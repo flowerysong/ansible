@@ -37,7 +37,7 @@ from ansible.errors import AnsibleError
 from ansible.executor.interpreter_discovery import InterpreterDiscoveryRequiredError
 from ansible.executor.powershell import module_manifest as ps_manifest
 from ansible.module_utils._text import to_bytes, to_text, to_native
-from ansible.plugins.loader import module_utils_loader
+from ansible.plugins.loader import module_group_loader, module_utils_loader
 # Must import strategy and use write_locks from there
 # If we import write_locks directly then we end up binding a
 # variable to the object and then it never gets updated.
@@ -1288,7 +1288,7 @@ def modify_module(module_name, module_path, module_args, templar, task_vars=None
     return (b_module_data, module_style, shebang)
 
 
-def get_action_args_with_defaults(action, args, defaults, templar):
+def get_action_args_with_defaults(action, args, defaults, templar, collections):
 
     tmp_args = {}
     module_defaults = {}
@@ -1303,9 +1303,12 @@ def get_action_args_with_defaults(action, args, defaults, templar):
         module_defaults = templar.template(module_defaults)
 
         # deal with configured group defaults first
-        if action in C.config.module_defaults_groups:
-            for group in C.config.module_defaults_groups.get(action, []):
-                tmp_args.update((module_defaults.get('group/{0}'.format(group)) or {}).copy())
+        for group, group_args in module_defaults.items():
+            if not group.startswith('group/'):
+                continue
+            module_group = module_group_loader.get(group[6:], collection_list=collections)
+            if module_group and action in getattr(module_group, 'MODULES', []):
+                tmp_args.update(group_args.copy())
 
         # handle specific action defaults
         if action in module_defaults:

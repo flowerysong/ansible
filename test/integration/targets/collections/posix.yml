@@ -354,6 +354,20 @@
   - include_tasks: includeme.yml
 
 
+- name: test a collection-hosted module group
+  hosts: testhost
+  module_defaults:
+    group/testns.testcoll.group:
+      msg: test string
+  tasks:
+  - debug:
+    register: result
+
+  - assert:
+      that:
+      - result.msg == 'test string'
+
+
 - name: test a collection-hosted connection plugin against a host from a collection-hosted inventory plugin
   hosts: dynamic_host_a
   vars:

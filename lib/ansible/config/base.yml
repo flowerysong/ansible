@@ -878,6 +878,14 @@ DEFAULT_MODULE_UTILS_PATH:
   ini:
   - {key: module_utils, section: defaults}
   type: pathspec
+MODULE_GROUP_PLUGIN_PATH:
+  name: module group plugins path
+  default: ~/.ansible/plugins/module_groups:/usr/share/ansible/plugins/module_groups
+  description: Colon separated paths in which Ansible will search for Module Group Plugins.
+  env: [{name: ANSIBLE_MODULE_GROUP_PLUGINS}]
+  ini:
+  - {key: module_group_plugins, section: defaults}
+  type: pathspec
 DEFAULT_NETCONF_PLUGIN_PATH:
   name: Netconf Plugins Path
   default: ~/.ansible/plugins/netconf:/usr/share/ansible/plugins/netconf
