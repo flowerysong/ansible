@@ -27,6 +27,7 @@ class ModuleGroup(object):
         'aws_direct_connect_gateway',
         'aws_direct_connect_link_aggregation_group',
         'aws_direct_connect_virtual_interface',
+        'aws_data_lifecycle_manager',
         'aws_eks_cluster',
         'aws_elasticbeanstalk_app',
         'aws_glue_connection',
