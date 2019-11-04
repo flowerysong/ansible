@@ -51,6 +51,8 @@ groupings:
   - aws
   aws_config_rule:
   - aws
+  aws_data_lifecycle_manager:
+  - aws
   aws_direct_connect_connection:
   - aws
   aws_direct_connect_gateway:
