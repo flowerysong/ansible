@@ -671,12 +671,8 @@ def main():
     if not os.path.exists(args['fstab']):
         if not os.path.exists(os.path.dirname(args['fstab'])):
             os.makedirs(os.path.dirname(args['fstab']))
-        try:
-            open(args['fstab'], 'a').close()
-        except PermissionError as e:
-            module.fail_json(msg="Failed to open %s due to permission issue" % args['fstab'])
-        except Exception as e:
-            module.fail_json(msg="Failed to open %s due to %s" % (args['fstab'], to_native(e)))
+
+        open(args['fstab'], 'a').close()
 
     # absent:
     #   Remove from fstab and unmounted.
@@ -719,9 +715,6 @@ def main():
 
             changed = True
     elif state == 'mounted':
-        if not os.path.exists(args['src']):
-            module.fail_json(msg="Unable to mount %s as it does not exist" % args['src'])
-
         if not os.path.exists(name) and not module.check_mode:
             try:
                 os.makedirs(name)
