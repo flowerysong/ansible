@@ -10,6 +10,7 @@ Hold command line arguments for use in other modules
 """
 
 from abc import ABCMeta
+from threading import local
 
 from ansible.module_utils.common._collections_compat import (Container, Mapping, Sequence, Set)
 from ansible.module_utils.common.collections import ImmutableDict

@@ -39,6 +39,8 @@ from ansible.executor.powershell import module_manifest as ps_manifest
 from ansible.module_utils._text import to_bytes, to_text, to_native
 from ansible.module_utils.compat.importlib import import_module
 from ansible.plugins.loader import module_utils_loader
+from ansible.utils.plugin_routing import _get_tombstones
+
 # Must import strategy and use write_locks from there
 # If we import write_locks directly then we end up binding a
 # variable to the object and then it never gets updated.
@@ -654,11 +656,38 @@ class CollectionModuleInfo(ModuleInfo):
                                                 to_native(name)))
 
     def get_source(self):
-        # FIXME (nitz): need this in py2 for some reason TBD, but we shouldn't (get_data delegates
-        # to wrong loader without it)
         pkg = import_module(self._package_name)
+        package_path = pkg.__file__
+
+        # ensure this is actually a package...
+        if os.path.basename(package_path) not in ['__init__.py', '__synthetic__'] and not os.path.isdir(package_path):
+            # only allow loading from real packages in this case; get_data's module-adjacent loading behavior
+            # will screw up the "module or attribute?" import probing code...
+            raise FileNotFoundError()
         data = pkgutil.get_data(to_native(self._package_name), to_native(self._mod_name + '.py'))
+
         return data
+
+
+class InternalRedirectModuleInfo(ModuleInfo):
+    def __init__(self, name, full_name):
+        self.pkg_dir = None
+        self._original_name = full_name
+        self.path = full_name.replace('.', '/') + '.py'
+        redirect = _get_tombstones().get('plugin_routing', {}).get('module_utils', {}).get(name, {}).get('redirect', None)
+        if not redirect:
+            raise ImportError('no redirect found for {0}'.format(name))
+        self._redirect = redirect
+        self.py_src = True
+        self._shim_src = """
+import sys
+import {1} as mod
+
+sys.modules['{0}'] = mod
+""".format(self._original_name, self._redirect)
+
+    def get_source(self):
+        return self._shim_src
 
 
 def recursive_finder(name, module_fqn, data, py_module_names, py_module_cache, zf):
@@ -740,7 +769,13 @@ def recursive_finder(name, module_fqn, data, py_module_names, py_module_cache, z
                                              [os.path.join(p, *relative_module_utils_dir[:-idx]) for p in module_utils_paths])
                     break
                 except ImportError:
-                    continue
+                    # check metadata for redirect, generate stub if present
+                    try:
+                        module_info = InternalRedirectModuleInfo(py_module_name[-idx],
+                                                                 '.'.join(py_module_name[:(None if idx == 1 else -1)]))
+                        break
+                    except ImportError:
+                        continue
         else:
             # If we get here, it's because of a bug in ModuleDepFinder.  If we get a reproducer we
             # should then fix ModuleDepFinder

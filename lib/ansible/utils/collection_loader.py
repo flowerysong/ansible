@@ -14,6 +14,8 @@ from types import ModuleType
 from ansible.module_utils._text import to_bytes, to_native, to_text
 from ansible.module_utils.compat.importlib import import_module
 from ansible.module_utils.six import iteritems, string_types, with_metaclass
+from ansible.utils.plugin_routing import _get_tombstones
+from ansible.utils.event import EventSource
 from ansible.utils.singleton import Singleton
 
 _SYNTHETIC_PACKAGES = {
@@ -21,16 +23,72 @@ _SYNTHETIC_PACKAGES = {
     'ansible_collections': dict(type='pkg_only', allow_external_subpackages=True),
     'ansible_collections.ansible': dict(type='pkg_only', allow_external_subpackages=True),
     # these implement the ansible.builtin synthetic collection mapped to the packages inside the ansible distribution
-    'ansible_collections.ansible.builtin': dict(type='pkg_only'),
+    'ansible_collections.ansible.builtin': dict(type='pkg_only', inject_collection_meta='ansible.config.routing.yml'),
     'ansible_collections.ansible.builtin.plugins': dict(type='map', map='ansible.plugins'),
     'ansible_collections.ansible.builtin.plugins.module_utils': dict(type='map', map='ansible.module_utils', graft=True),
     'ansible_collections.ansible.builtin.plugins.modules': dict(type='flatmap', flatmap='ansible.modules', graft=True),
 }
 
 
+# path hook finder shim that implements iter_modules support for Ansible's custom namespace packages
+class _AnsibleCollectionPathHookImporter(object):
+    def __init__(self, path, collection_loader):
+        self._path = path
+        self._collection_loader = collection_loader
+        self.find_module = collection_loader.find_module
+        self.load_module = collection_loader.load_module
+
+    def iter_modules(self, prefix=''):
+        if not prefix:
+            prefix = ''
+        else:
+            prefix = to_native(prefix)
+        # yield (module_loader, name, ispkg) for each module/pkg under path
+        # TODO: implement ignore for unreadable?
+        for basename in os.listdir(self._path):
+            candidate_module_path = os.path.join(self._path, basename)
+            if os.path.isdir(candidate_module_path):
+                # exclude things that obviously aren't Python package dirs
+                if '.' in basename or basename == '__pycache__':
+                    continue
+
+                # TODO: proper string handling?
+                yield prefix + to_native(basename), True
+            else:
+                # FIXME: match builtin ordering for package/dir/file, support compiled?
+                if basename.endswith('.py') and basename != '__init__.py':
+                    yield prefix + to_native(os.path.splitext(basename)[0]), False
+
+    def __repr__(self):
+        return '_AnsibleCollectionPathHookImporter({0!r})'.format(self._path)
+
+
 # FIXME: exception handling/error logging
 class AnsibleCollectionLoader(with_metaclass(Singleton, object)):
     def __init__(self, config=None):
+        # HACK: seed this before the collection loader is on the path so we don't get into a circular get_data package load loop
+        ts = _get_tombstones()
+        # generate a list of internal packages that we might need to redirect imports for; ensure we answer loader requests for them
+        redirect_entries = ts.get('import_redirection', {}).keys()
+        self._hijack_packages = set()
+        for package in redirect_entries:
+            parent_package = package.rpartition('.')[0]
+            while parent_package:
+                self._hijack_packages.add(parent_package)
+                parent_package = parent_package.rpartition('.')[0]
+
+        if 'ansible' in self._hijack_packages:
+            self._hijack_packages.remove('ansible')
+
+        # TODO: scan/patch all previously-loaded packages listed for direct import to ensure they use this loader
+        # HACK: patch already-loaded ansible packages to use this loader instead
+        # snag the builtin loader so we can delegate to it for builtin stuff
+        sys.modules['ansible.module_utils'].__loader__ = self
+
+        sys.path_hooks.insert(0, self._pathhook)
+        # TODO: make the parts of this that shouldn't be repeated check for that (mainly for tests)
+        self.on_collection_load = EventSource()
+
         if config:
             paths = config.get_config_value('COLLECTIONS_PATHS')
         else:
@@ -80,6 +138,14 @@ class AnsibleCollectionLoader(with_metaclass(Singleton, object)):
 
             sys.modules[pkg_name] = newmod
 
+    def _pathhook(self, path):
+        # NB: this path hook shim ensures that we never accidentally use the builtin importer for collections paths,
+        # especially when using pkgutil.iter_modules or any other path-based importer
+        if any((p for p in self.n_collection_paths if path.startswith(p))):
+            return _AnsibleCollectionPathHookImporter(path, self)
+
+        raise ImportError('AnsibleCollectionLoader is not interested')
+
     @property
     def n_collection_paths(self):
         return self._n_playbook_paths + self._n_configured_paths
@@ -127,9 +193,25 @@ class AnsibleCollectionLoader(with_metaclass(Singleton, object)):
         return mod
 
     def _find_module(self, fullname, path, load):
-        # this loader is only concerned with items under the Ansible Collections namespace hierarchy, ignore others
+        # this loader is only concerned with items under the Ansible Collections namespace hierarchy
+        # and items with a redirected namespace, ignore others
+        original_name = None
+        redirect = None
         if not fullname.startswith('ansible_collections.') and fullname != 'ansible_collections':
-            return False, None
+            # if the requested parent package doesn't have redirections, ignore it
+            if fullname.rpartition('.')[0] not in self._hijack_packages:
+                return False, None
+
+            ts = _get_tombstones()
+            redirect = ts.get('import_redirection', {}).get(fullname, {}).get('redirect', None)
+            if not redirect:
+                # this isn't an import we can handle, bail out
+                return False, None
+            else:
+                # FIXME: this can't stay here, eventing or logging patch
+                sys.stderr.write("redirecting (python direct import) {0} to {1}\n".format(fullname, redirect))
+                original_name = fullname
+                fullname = redirect
 
         if sys.modules.get(fullname):
             if not load:
@@ -140,22 +222,30 @@ class AnsibleCollectionLoader(with_metaclass(Singleton, object)):
         newmod = None
 
         # this loader implements key functionality for Ansible collections
-        # * implicit distributed namespace packages for the root Ansible namespace (no pkgutil.extend_path hackery reqd)
         # * implicit package support for Python 2.7 (no need for __init__.py in collections, except to use standard Py2.7 tooling)
-        # * preventing controller-side code injection during collection loading
-        # * (default loader would execute arbitrary package code from all __init__.py's)
+        # * implicit distributed namespace packages for the root ansible_collections and first-level packages (no pkgutil.extend_path hackery reqd)
+        # * optional future explicit control over executing code in __init__.py
 
         parent_pkg_name = '.'.join(fullname.split('.')[:-1])
 
         parent_pkg = sys.modules.get(parent_pkg_name)
 
         if parent_pkg_name and not parent_pkg:
-            raise ImportError('parent package {0} not found'.format(parent_pkg_name))
+            try:
+                parent_pkg = import_module(parent_pkg_name)
+            except Exception as ex:
+                # FIXME: this can't stay here
+                sys.stderr.write("error importing parent package: {0}".format(ex))
+            if not parent_pkg:
+                raise ImportError('parent package {0} not found'.format(parent_pkg_name))
 
         # are we at or below the collection level? eg a.mynamespace.mycollection.something.else
-        # if so, we don't want distributed namespace behavior; first mynamespace.mycollection on the path is where
-        # we'll load everything from (ie, don't fall back to another mynamespace.mycollection lower on the path)
-        sub_collection = fullname.count('.') > 1
+        # if so, we don't want distributed namespace behavior; first mynamespace.mycollection we find is where
+        # we'll load everything from (ie, don't fall back to another mynamespace.mycollection in a
+        # later collection root path)
+        dot_count = fullname.count('.')
+        sub_collection = dot_count > 1  # eg ansible_collections.namespace.collection.plugins.modules.whatever
+        is_collection_package = dot_count == 2
 
         synpkg_def = _SYNTHETIC_PACKAGES.get(fullname)
         synpkg_remainder = ''
@@ -197,6 +287,11 @@ class AnsibleCollectionLoader(with_metaclass(Singleton, object)):
                 newmod.__file__ = '<ansible_synthetic_collection_package>'
                 newmod.__loader__ = self
                 newmod.__path__ = []
+
+                # TODO: clean this up and/or do in subclass
+                if synpkg_def.get('inject_collection_meta'):
+                    ts = _get_tombstones()
+                    newmod._collection_meta = ts
 
                 if not synpkg_def.get('allow_external_subpackages'):
                     # if external subpackages are NOT allowed, we're done
@@ -256,16 +351,30 @@ class AnsibleCollectionLoader(with_metaclass(Singleton, object)):
                 newmod.__package__ = parent_pkg_name
 
             sys.modules[fullname] = newmod
+            if redirect and not sys.modules.get(original_name):
+                sys.modules[original_name] = newmod
 
             if code_object:
                 # FIXME: decide cases where we don't actually want to exec the code?
                 exec(code_object, newmod.__dict__)
+
+            # FIXME: share this with the fallback (via finally, wrapper, or ?)
+            if is_collection_package:
+                # notify anything that's listening (eg collection metadata loader) that a new collection has been loaded
+                # FIXME: update on_collection_load to use a typed event and event data object
+                self.on_collection_load.fire(fullname)
 
             return True, newmod
 
         # even if we didn't find one on disk, fall back to a synthetic package if we have one...
         if newmod:
             sys.modules[fullname] = newmod
+
+            if is_collection_package:
+                # notify anything that's listening (eg collection metadata loader) that a new collection has been loaded
+                # FIXME: update on_collection_load to use a typed event and event data object
+                self.on_collection_load.fire(fullname)
+
             return True, newmod
 
         # FIXME: need to handle the "no dirs present" case for at least the root and synthetic internal collections like ansible.builtin
@@ -279,6 +388,7 @@ class AnsibleCollectionLoader(with_metaclass(Singleton, object)):
         return os.path.join(path, ns_path_add)
 
     def get_data(self, filename):
+        # NB: get_data is not redirection-aware; it expects that any redirection has been handled previously
         with open(filename, 'rb') as fd:
             return fd.read()
 
@@ -390,6 +500,8 @@ class AnsibleCollectionRef:
         self.ref_type = ref_type
 
         package_components = [u'ansible_collections', self.collection]
+
+        self.n_python_collection_package_name = to_native('.'.join(package_components))
 
         if self.ref_type == u'role':
             package_components.append(u'roles')
@@ -540,6 +652,19 @@ def get_collection_role_path(role_name, collection_list=None):
 
 
 _N_COLLECTION_PATH_RE = re.compile(r'/ansible_collections/([^/]+)/([^/]+)')
+
+
+def _get_collection_meta_from_path(path):
+    """
+    Returns the collection routing metadata for a given path (if present). This assumes the collection package has
+    already been loaded (eg, the final resource-load pass for pkgutil.get_data).
+    :param path: path to a resource below a collection package
+    :return: collection __meta__ value or None
+    """
+    # We want this to be quicker than scanning the filesystem, so just look for the right bits in the path. This is
+    # only legit if the collection package itself has already been loaded, otherwise we're bypassing a bunch of other
+    # important path-masking.
+    COLLECTION_PATH_RE = r'ansible_collections/'
 
 
 def get_collection_name_from_path(path):
