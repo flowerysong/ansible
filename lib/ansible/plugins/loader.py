@@ -44,6 +44,7 @@ try:
     imp = None
 except ImportError:
     import imp
+    ModuleNotFoundError = None
 
 display = Display()
 
@@ -448,7 +449,10 @@ class PluginLoader:
         pkg = sys.modules.get(acr.n_python_package_name)
         if not pkg:
             # FIXME: there must be cheaper/safer way to do this
-            pkg = import_module(acr.n_python_package_name)
+            try:
+                pkg = import_module(acr.n_python_package_name)
+            except (ImportError, ModuleNotFoundError):
+                return plugin_load_context.nope('Python package {0} not found'.format(acr.n_python_package_name))
 
         # if the package is one of our flatmaps, we need to consult its loader to find the path, since the file could be
         # anywhere in the tree
