@@ -66,6 +66,11 @@ class _AnsibleCollectionPathHookImporter(object):
 # FIXME: exception handling/error logging
 class AnsibleCollectionLoader(with_metaclass(Singleton, object)):
     def __init__(self, config=None):
+        # ensure our path hook ignores sys.path entries below a collection root (eg ansible-test units)
+        # FUTURE: better detection than embedded `ansible_collections` (eg cartesian product of collection roots + sys.path)
+        self._blacklist_nested_sys_path_prefixes = [p for p in sys.path if 'ansible_collections' in p]
+        self._whitelist_ansible_path = os.path.dirname(sys.modules['ansible'].__file__)
+
         # HACK: seed this before the collection loader is on the path so we don't get into a circular get_data package load loop
         ts = _get_tombstones()
         # generate a list of internal packages that we might need to redirect imports for; ensure we answer loader requests for them
@@ -85,7 +90,9 @@ class AnsibleCollectionLoader(with_metaclass(Singleton, object)):
         # snag the builtin loader so we can delegate to it for builtin stuff
         sys.modules['ansible.module_utils'].__loader__ = self
 
+        # FIXME: make sure we don't already have one, or move this and meta_path wireup internal for tests etc?
         sys.path_hooks.insert(0, self._pathhook)
+
         # TODO: make the parts of this that shouldn't be repeated check for that (mainly for tests)
         self.on_collection_load = EventSource()
 
@@ -139,9 +146,21 @@ class AnsibleCollectionLoader(with_metaclass(Singleton, object)):
             sys.modules[pkg_name] = newmod
 
     def _pathhook(self, path):
-        # NB: this path hook shim ensures that we never accidentally use the builtin importer for collections paths,
-        # especially when using pkgutil.iter_modules or any other path-based importer
+        # NB: this path_hook entry ensures the collection loader will be used for collections and certain parts
+        # of Ansible itself for things that don't use sys.meta_path (eg pkgutil.iter_modules and get_data)
+        interested = False
         if any((p for p in self.n_collection_paths if path.startswith(p))):
+            # special case to whitelist Ansible itself if installed under a collection root
+            # (eg `ansible-test units` or other venvs under collection root)
+            if path.startswith(self._whitelist_ansible_path):
+                interested = True
+            # prevent this loader from expressing interest in sys.path paths under our collection roots,
+            # this allows the built-in loader to pick these up normally, but also prevents usage of sys.path
+            # installed collections below a collection root (not common)
+            elif not any((path.startswith(p) for p in self._blacklist_nested_sys_path_prefixes)):
+                interested = True
+
+        if interested:
             return _AnsibleCollectionPathHookImporter(path, self)
 
         raise ImportError('AnsibleCollectionLoader is not interested')
