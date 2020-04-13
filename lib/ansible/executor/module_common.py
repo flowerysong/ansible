@@ -634,39 +634,40 @@ class ModuleInfo:
 
 
 class CollectionModuleInfo(ModuleInfo):
-    def __init__(self, name, paths):
+    _COLLECTION_PKG_RE = re.compile(to_text(r'ansible_collections\.([^\.]+)\.([^.]+)\.(.+)'))
+
+    def __init__(self, name, pkg):
         self._mod_name = name
         self.py_src = True
-        # FIXME: Implement pkg_dir so that we can place __init__.py files
         self.pkg_dir = False
 
-        for path in paths:
-            self._package_name = '.'.join(path.split('/'))
-            try:
-                self.get_source()
-            except FileNotFoundError:
-                pass
-            else:
-                self.path = os.path.join(path, self._mod_name) + '.py'
-                break
+        # NB: we can't use pkgutil.get_data safely here, since we don't want to import/execute package/module code on
+        # the controller while analyzing/assembling the module, so we'll have to manually import the collection's
+        # Python package to locate it (import root collection, reassemble resource path beneath, fetch source)
+        pkg_match = self._COLLECTION_PKG_RE.match(pkg)
+        if not pkg_match:
+            raise ValueError('Invalid package {0}; CollectionModuleInfo requires a collection package name beneath'
+                             'the ansible_collections namespace'.format(to_native(pkg)))
+
+        collection_pkg_name = 'ansible_collections.{0}.{1}'.format(pkg_match.group(1), pkg_match.group(2))
+        # import the collection package, while will either raise ImportError or give us a collection to poke into
+        pkg = import_module(collection_pkg_name)
+
+        # FIXME: handle MU redirection logic here
+
+        target_pkg_path = os.path.join(os.path.dirname(pkg.__file__), pkg_match.group(3).replace('.', '/'))
+        # if pkg contains both sub/__init__.py and sub.py, Python loader favors sub/__init__.py, thus so do we
+        self.path = os.path.join(target_pkg_path, self._mod_name, '__init__.py')
+        if os.path.isfile(self.path):
+            self.pkg_dir = True
         else:
-            # FIXME (nitz): implement package fallback code
-            raise ImportError('unable to load collection-hosted module_util'
-                              ' {0}.{1}'.format(to_native(self._package_name),
-                                                to_native(name)))
+            self.path = os.path.join(target_pkg_path, self._mod_name + '.py')
+            if not os.path.isfile(self.path):
+                raise ImportError('unable to load collection-hosted module_util'
+                                  ' {0}.{1}'.format(to_native(pkg), to_native(name)))
 
     def get_source(self):
-        pkg = import_module(self._package_name)
-        package_path = pkg.__file__
-
-        # ensure this is actually a package...
-        if os.path.basename(package_path) not in ['__init__.py', '__synthetic__'] and not os.path.isdir(package_path):
-            # only allow loading from real packages in this case; get_data's module-adjacent loading behavior
-            # will screw up the "module or attribute?" import probing code...
-            raise FileNotFoundError()
-        data = pkgutil.get_data(to_native(self._package_name), to_native(self._mod_name + '.py'))
-
-        return data
+        return _slurp(self.path)
 
 
 class InternalRedirectModuleInfo(ModuleInfo):
@@ -750,8 +751,7 @@ def recursive_finder(name, module_fqn, data, py_module_names, py_module_cache, z
                     break
                 try:
                     # this is a collection-hosted MU; look it up with pkgutil.get_data()
-                    module_info = CollectionModuleInfo(py_module_name[-idx],
-                                                       [os.path.join(*py_module_name[:-idx])])
+                    module_info = CollectionModuleInfo(py_module_name[-idx], '.'.join(py_module_name[:-idx]))
                     break
                 except ImportError:
                     continue
